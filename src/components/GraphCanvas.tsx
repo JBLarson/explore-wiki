@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import cytoscape, { Core, NodeSingular } from 'cytoscape';
+import cytoscape, { Core } from 'cytoscape';
 import { useGraphStore } from '../stores/graphStore';
 
 interface GraphCanvasProps {
@@ -19,43 +19,43 @@ export function GraphCanvas({ onNodeClick, onNodeRightClick }: GraphCanvasProps)
     cyRef.current = cytoscape({
       container: containerRef.current,
       
-        style: [
+      style: [
         {
-            selector: 'node',
-            style: {
+          selector: 'node',
+          style: {
             'background-color': '#4A90E2',
             'label': 'data(label)',
             'color': '#fff',
             'text-valign': 'center',
             'text-halign': 'center',
-            'font-size': '12px',
-            'font-weight': 600,  // Remove quotes - it's a number
-            'width': 'label',
-            'height': 'label',
-            'padding': '12px',
-            'shape': 'roundrectangle',
+            'font-size': 12,
+            'font-weight': 600,
+            'width': 100,
+            'height': 100,
+            'shape': 'ellipse',
             'text-wrap': 'wrap',
-            'text-max-width': '120px',
+            'text-max-width': 70,
             'transition-property': 'background-color, border-width',
-            'transition-duration': '0.2s',
-            } as any,  // Add type assertion to bypass strict typing
+            'transition-duration': 0.2,
+            'border-width': 2,
+            'border-color': '#357ABD',
+          } as any,
         },
         {
           selector: 'node:hover',
           style: {
             'background-color': '#357ABD',
-            'cursor': 'pointer',
-            'border-width': 3,
+            'border-width': 4,
             'border-color': '#2C5F8D',
-          },
+          } as any,
         },
         {
           selector: 'node.selected',
           style: {
             'background-color': '#E74C3C',
-            'border-width': 3,
+            'border-width': 4,
             'border-color': '#C0392B',
-          },
+          } as any,
         },
         {
           selector: 'edge',
@@ -66,8 +66,8 @@ export function GraphCanvas({ onNodeClick, onNodeRightClick }: GraphCanvasProps)
             'target-arrow-shape': 'triangle',
             'curve-style': 'bezier',
             'opacity': 0.6,
-            'arrow-scale': 1,
-          },
+            'arrow-scale': 1.2,
+          } as any,
         },
         {
           selector: 'edge.highlighted',
@@ -76,20 +76,34 @@ export function GraphCanvas({ onNodeClick, onNodeRightClick }: GraphCanvasProps)
             'target-arrow-color': '#4A90E2',
             'opacity': 1,
             'width': 3,
-          },
+          } as any,
         },
       ],
       
       layout: {
         name: 'cose',
         animate: true,
-        animationDuration: 500,
-        nodeRepulsion: 8000,
-        idealEdgeLength: 100,
+        animationDuration: 1000,
+        animationEasing: 'ease-out',
+        
+        // Prevent overlap
+        nodeOverlap: 20,
+        
+        // Physics parameters
+        nodeRepulsion: 400000, // Strong repulsion to spread nodes out
+        idealEdgeLength: 150,
         edgeElasticity: 100,
+        
+        // Gravity and positioning
+        gravity: 1,
+        numIter: 1000,
+        
+        // Prevent overlapping
+        avoidOverlap: true,
+        
         fit: true,
-        padding: 30,
-      },
+        padding: 50,
+      } as any,
       
       wheelSensitivity: 0.2,
       minZoom: 0.3,
@@ -167,12 +181,27 @@ export function GraphCanvas({ onNodeClick, onNodeRightClick }: GraphCanvasProps)
       cy.layout({
         name: 'cose',
         animate: true,
-        animationDuration: 500,
-        nodeRepulsion: 8000,
-        idealEdgeLength: 100,
+        animationDuration: 1000,
+        animationEasing: 'ease-out',
+        
+        // Prevent overlap
+        nodeOverlap: 20,
+        
+        // Physics parameters
+        nodeRepulsion: 400000,
+        idealEdgeLength: 150,
+        edgeElasticity: 100,
+        
+        // Gravity and positioning
+        gravity: 1,
+        numIter: 1000,
+        
+        // Prevent overlapping
+        avoidOverlap: true,
+        
         fit: true,
-        padding: 30,
-      }).run();
+        padding: 50,
+      } as any).run();
     }
   }, [nodes, edges]);
   
@@ -192,7 +221,6 @@ export function GraphCanvas({ onNodeClick, onNodeRightClick }: GraphCanvasProps)
     <div
       ref={containerRef}
       className="w-full h-full bg-gray-50"
-      style={{ cursor: 'grab' }}
     />
   );
 }
