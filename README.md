@@ -1,6 +1,6 @@
 # Explore Wiki
 
-A desktop-first web application for exploring Wikipedia as an interactive knowledge graph.
+A desktop-first web application for exploring Wikipedia as a radial tree / interactive knowledge graph.
 
 ## What it does
 
@@ -25,3 +25,11 @@ Search for any Wikipedia article and visualize its connections as an interactive
 - Smooth physics-based graph layout
 - Hover effects and connection highlighting
 - Sidebar with article previews and statistics
+
+## Inspiration
+
+Inspired by [WikiNodes](https://en.wikipedia.org/wiki/WikiNodes) a Wikipedia graph visualization app that was available on iPad in the early 2010s. That app offered a beautiful way to explore knowledge visually, but has since disappeared from the app store.
+
+This is a modern, open-source, desktop-first recreation of that concept.
+
+Special thanks to the original WikiNodes developers for pioneering this approach to knowledge exploration.
