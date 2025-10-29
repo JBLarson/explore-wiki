@@ -10,6 +10,15 @@ export interface WikiLink {
   score: number;
 }
 
+// UPDATED: Now includes the graph connection count
+export interface WikiLinkSignals {
+  title: string;
+  pageviews: number;
+  backlinks: number;
+  extract: string;
+  graphConnections: number; // <-- ADDED
+}
+
 export interface GraphNode {
   id: string;
   label: string;

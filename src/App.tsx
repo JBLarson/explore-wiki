@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GraphCanvas } from './components/GraphCanvas';
 import { SearchBar } from './components/SearchBar';
 import { Sidebar } from './components/SideBar';
+// ... imports
 import { useGraphStore } from './stores/graphStore';
 import { fetchArticleSummary, fetchArticleLinks } from './lib/wikipedia';
 import type { WikiArticle } from './types';
@@ -10,12 +11,16 @@ import type { WikiArticle } from './types';
 const queryClient = new QueryClient();
 
 function AppContent() {
+  // Grab the 'nodes' array from the store
   const { nodes, edges, addNode, addEdge, setSelectedNode, addToHistory, clearGraph } = useGraphStore();
   const [selectedArticle, setSelectedArticle] = useState<WikiArticle | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   
   const loadArticle = useCallback(async (title: string) => {
     setIsLoading(true);
+    
+    // Create a list of all node labels currently on the graph
+    const existingNodeLabels = nodes.map(n => n.label);
     
     try {
       // Fetch article summary
@@ -33,8 +38,10 @@ function AppContent() {
       setSelectedNode(nodeId);
       addToHistory(nodeId);
       
-      // Fetch and add linked articles
-      const links = await fetchArticleLinks(title);
+      // --- MODIFICATION HERE ---
+      // Pass the existing node labels to the fetch function
+      const links = await fetchArticleLinks(title, existingNodeLabels);
+      // --- END MODIFICATION ---
       
       for (const link of links) {
         const linkNodeId = link.title.replace(/\s+/g, '_');
@@ -63,14 +70,24 @@ function AppContent() {
     } finally {
       setIsLoading(false);
     }
-  }, [addNode, addEdge, setSelectedNode, addToHistory]);
+    // Update dependencies array
+  }, [nodes, addNode, addEdge, setSelectedNode, addToHistory]); // 'nodes' is now a dependency
   
   const handleNodeClick = useCallback((nodeId: string) => {
     const node = nodes.find(n => n.id === nodeId);
     if (node) {
-      loadArticle(node.label);
+      // Check if node already has children to prevent re-fetching
+      const hasChildren = edges.some(e => e.source === nodeId);
+      if (!hasChildren) {
+        loadArticle(node.label);
+      } else {
+        // Just select the node and show its info
+        fetchArticleSummary(node.label).then(setSelectedArticle);
+        setSelectedNode(nodeId);
+      }
     }
-  }, [nodes, loadArticle]);
+  }, [nodes, edges, loadArticle, setSelectedNode]); // 'edges' is now a dependency
+  
   
   const handleNodeRightClick = useCallback((nodeId: string, x: number, y: number) => {
     // TODO: Show context menu
