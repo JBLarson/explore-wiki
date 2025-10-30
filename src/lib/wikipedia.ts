@@ -1,39 +1,35 @@
-import type { WikiArticle, WikiLink, WikiLinkSignals } from '../types';
+import type { WikiArticle, WikiLink } from '../types';
 
-// --- API Endpoints ---
+// API Endpoints
 const WIKI_API_BASE = 'https://en.wikipedia.org/api/rest_v1';
 const WIKI_ACTION_API = 'https://en.wikipedia.org/w/api.php';
 const WIKI_PAGEVIEWS_API = 'https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article';
 
-// --- Ranking Configuration ---
+// Configuration
 const LINKS_TO_RETURN = 7;
+const MAX_CANDIDATES = 30;
 
-// NEW 4-SIGNAL WEIGHTS: Graph connection is the most important signal
-const W_GRAPH_CONNS = 0.4;  // 40% (New)
-const W_SIMILARITY = 0.3;   // 30%
-const W_BACKLINKS = 0.2;    // 20%
-const W_PAGEVIEWS = 0.1;    // 10%
-
-// NEW: Global maximums for robust, non-batch normalization
-// (Based on rough 2024 numbers for highly-linked pages like "United States" or "World War II")
-const GLOBAL_MAX_BACKLINKS = 3_000_000;
-const GLOBAL_MAX_PAGEVIEWS = 50_000_000; // (Monthly)
-
-// Simple list of "stop words"
-const STOP_WORDS = new Set([
-  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'has', 'he',
-  'in', 'is', 'it', 'its', 'of', 'on', 'that', 'the', 'to', 'was', 'were',
-  'will', 'with', 'this', 'such', 'also', 'which', 'may', 'see', 'use',
-  'many', 'can', 'often', 'used', 'known', 'more', 'other', 'some', 'these'
-]);
+// Scoring weights
+const WEIGHTS = {
+  graphConnection: 0.40,
+  textRelevance: 0.30,
+  popularity: 0.20,
+  linkPosition: 0.10
+};
 
 /**
- * Fetches the summary for a single Wikipedia article.
+ * Fetches article summary
  */
 export async function fetchArticleSummary(title: string): Promise<WikiArticle> {
   const url = `${WIKI_API_BASE}/page/summary/${encodeURIComponent(title)}`;
-  const response = await fetch(url, { headers: { 'User-Agent': 'WikiExplorer/1.0 (Educational project)' } });
-  if (!response.ok) throw new Error(`Failed to fetch article: ${response.statusText}`);
+  const response = await fetch(url, { 
+    headers: { 'User-Agent': 'WikiExplorer/1.0' } 
+  });
+  
+  if (!response.ok) {
+    throw new Error(`Failed to fetch article: ${response.statusText}`);
+  }
+  
   const data = await response.json();
   return {
     title: data.title,
@@ -44,379 +40,312 @@ export async function fetchArticleSummary(title: string): Promise<WikiArticle> {
 }
 
 /**
- * Orchestrator function to fetch, filter, and rank links for a given article.
- * NOW ACCEPTS existingNodeLabels.
+ * Main function - fetches and ranks related articles
  */
-export async function fetchArticleLinks(title: string, existingNodeLabels: string[]): Promise<WikiLink[]> {
-  // 1. Get source extract and intro links in parallel
-  const [sourceArticle, introLinks] = await Promise.all([
-    fetchArticleSummary(title),
-    fetchIntroLinks(title)
-  ]);
-  const sourceExtract = sourceArticle.extract;
-  
-  // 2. Apply aggressive pre-filters
-  const filteredLinks = introLinks
-    .filter(linkTitle => !isMetaPage(linkTitle) && linkTitle !== title)
-    .filter((value, index, self) => self.indexOf(value) === index);
-  
-  if (filteredLinks.length === 0) return [];
-  
-  // 3. Fetch all signals, now including graph connections
-  const linksWithSignals = await fetchLinkSignals(
-    filteredLinks,
-    existingNodeLabels.filter(label => label !== title) // Don't count self
-  );
-  
-  // 4. Apply the weighted ranking algorithm
-  const rankedLinks = rankLinks(linksWithSignals, sourceExtract, existingNodeLabels.length);
-  
-  // 5. Return the top N links
-  return rankedLinks.slice(0, LINKS_TO_RETURN);
-}
-
-/**
- * Fetches all links from the introduction (section 0) of a page.
- */
-async function fetchIntroLinks(title: string): Promise<string[]> {
-  const params = new URLSearchParams({
-    action: 'parse', page: title, prop: 'links', section: '0',
-    format: 'json', origin: '*',
-  });
+export async function fetchArticleLinks(
+  title: string, 
+  existingNodeLabels: string[]
+): Promise<WikiLink[]> {
   try {
-    const response = await fetch(`${WIKI_ACTION_API}?${params}`);
-    const data = await response.json();
-    if (data.parse?.links) {
-      return data.parse.links
-        .filter((link: any) => link.ns === 0)
-        .map((link: any) => link['*']);
-    }
-  } catch (error) { console.error('Failed to fetch intro links:', error); }
-  return [];
-}
-
-/**
- * Takes a list of article titles and fetches all signals for them.
- */
-async function fetchLinkSignals(titles: string[], existingNodeLabels: string[]): Promise<WikiLinkSignals[]> {
-  try {
-    // Fetch all signals concurrently
-    const [pageviewsMap, backlinksMap, extractsMap, graphConnectionsMap] = await Promise.all([
-      fetchPageviews(titles),
-      fetchBacklinks(titles),
-      fetchExtracts(titles),
-      fetchGraphConnections(titles, existingNodeLabels),
+    // Get source content and links
+    const [sourceExtract, candidates] = await Promise.all([
+      getArticleExtract(title),
+      getArticleLinks(title)
     ]);
+
+    // Filter candidates
+    const filtered = candidates
+      .filter((link: any) => !isMetaPage(link.title))
+      .filter((link: any) => link.title !== title)
+      .filter((link: any) => !existingNodeLabels.includes(link.title))
+      .slice(0, MAX_CANDIDATES);
+
+    if (filtered.length === 0) return [];
+
+    // Score each candidate
+    const scored = await scoreLinks(filtered, sourceExtract, existingNodeLabels);
     
-    // Combine signals into one object per title
-    return titles.map(title => ({
-      title: title,
-      pageviews: pageviewsMap.get(title) || 0,
-      backlinks: backlinksMap.get(title) || 0,
-      extract: extractsMap.get(title) || "",
-      graphConnections: graphConnectionsMap.get(title) || 0,
-    })).filter(link => link.extract); // Ensure we have an extract to compare
-  
+    // Return top N
+    return scored
+      .sort((a, b) => b.score - a.score)
+      .slice(0, LINKS_TO_RETURN);
+    
   } catch (error) {
-    console.error("Error fetching link signals:", error);
+    console.error('Error fetching links:', error);
     return [];
   }
 }
 
 /**
- * NEW: Checks which candidate links are also linked to by existing graph nodes.
- * Returns a Map<candidateTitle, connection_count>.
+ * Get article extract for comparison
  */
-async function fetchGraphConnections(
-  candidateTitles: string[],
-  existingNodeLabels: string[]
-): Promise<Map<string, number>> {
-  const results = new Map<string, number>(candidateTitles.map(t => [t, 0]));
+async function getArticleExtract(title: string): Promise<string> {
+  const params = new URLSearchParams({
+    action: 'query',
+    prop: 'extracts',
+    titles: title,
+    exintro: 'true',
+    explaintext: 'true',
+    format: 'json',
+    origin: '*'
+  });
+
+  const res = await fetch(`${WIKI_ACTION_API}?${params}`);
+  const data = await res.json();
+  const pages = data.query?.pages || {};
+  const page = Object.values(pages)[0] as any;
+  return page?.extract || '';
+}
+
+/**
+ * Get links from article with position info
+ */
+async function getArticleLinks(title: string): Promise<any[]> {
+  const params = new URLSearchParams({
+    action: 'parse',
+    page: title,
+    prop: 'links',
+    section: '0',
+    format: 'json',
+    origin: '*'
+  });
+
+  const res = await fetch(`${WIKI_ACTION_API}?${params}`);
+  const data = await res.json();
   
-  // If there are no other nodes on the graph, skip this
-  if (existingNodeLabels.length === 0) {
+  if (!data.parse?.links) return [];
+
+  return data.parse.links
+    .filter((link: any) => link.ns === 0)
+    .map((link: any, index: number) => ({
+      title: link['*'],
+      position: index
+    }));
+}
+
+/**
+ * Score links based on multiple factors
+ */
+async function scoreLinks(
+  candidates: any[],
+  sourceExtract: string,
+  existingNodes: string[]
+): Promise<WikiLink[]> {
+  const titles = candidates.map(c => c.title);
+  
+  // Batch fetch data
+  const [extracts, pageviews, connections] = await Promise.all([
+    batchFetchExtracts(titles),
+    batchFetchPageviews(titles),
+    batchCheckConnections(titles, existingNodes)
+  ]);
+
+  return candidates.map(candidate => {
+    const title = candidate.title;
+    
+    // Calculate individual scores
+    const scores = {
+      graphConnection: connections.get(title) || 0,
+      textRelevance: calculateSimilarity(
+        sourceExtract,
+        extracts.get(title) || ''
+      ),
+      popularity: normalizePageviews(pageviews.get(title) || 0),
+      linkPosition: 1 - (candidate.position / candidates.length)
+    };
+
+    // Calculate weighted total
+    const total = Object.entries(scores).reduce(
+      (sum, [key, value]) => sum + (value * WEIGHTS[key as keyof typeof WEIGHTS]),
+      0
+    );
+
+    return {
+      title,
+      score: Math.round(total * 100)
+    };
+  });
+}
+
+/**
+ * Batch fetch article extracts
+ */
+async function batchFetchExtracts(titles: string[]): Promise<Map<string, string>> {
+  const results = new Map<string, string>();
+  const batches = [];
+  
+  for (let i = 0; i < titles.length; i += 20) {
+    batches.push(titles.slice(i, i + 20));
+  }
+
+  await Promise.all(
+    batches.map(async batch => {
+      const params = new URLSearchParams({
+        action: 'query',
+        prop: 'extracts',
+        titles: batch.join('|'),
+        exintro: 'true',
+        explaintext: 'true',
+        exsentences: '3',
+        format: 'json',
+        origin: '*'
+      });
+
+      try {
+        const res = await fetch(`${WIKI_ACTION_API}?${params}`);
+        const data = await res.json();
+        
+        if (data.query?.pages) {
+          Object.values(data.query.pages).forEach((page: any) => {
+            results.set(page.title, page.extract || '');
+          });
+        }
+      } catch (e) {
+        console.error('Extract fetch error:', e);
+      }
+    })
+  );
+
+  return results;
+}
+
+/**
+ * Batch fetch pageviews
+ */
+async function batchFetchPageviews(titles: string[]): Promise<Map<string, number>> {
+  const results = new Map<string, number>();
+  const endDate = new Date();
+  endDate.setDate(endDate.getDate() - 1);
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - 31);
+  
+  const format = (d: Date) => d.toISOString().split('T')[0].replace(/-/g, '');
+  
+  await Promise.all(
+    titles.map(async title => {
+      const encoded = encodeURIComponent(title.replace(/ /g, '_'));
+      const url = `${WIKI_PAGEVIEWS_API}/en.wikipedia/all-access/all-agents/${encoded}/daily/${format(startDate)}/${format(endDate)}`;
+      
+      try {
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = await res.json();
+          const total = data.items?.reduce((sum: number, item: any) => sum + item.views, 0) || 0;
+          results.set(title, total);
+        }
+      } catch (e) {
+        results.set(title, 0);
+      }
+    })
+  );
+
+  return results;
+}
+
+/**
+ * Check connections to existing graph
+ */
+async function batchCheckConnections(
+  candidates: string[],
+  existingNodes: string[]
+): Promise<Map<string, number>> {
+  const results = new Map<string, number>();
+  
+  if (existingNodes.length === 0) {
+    candidates.forEach(c => results.set(c, 0));
     return results;
   }
-  
-  // We check what the *existing nodes* link to.
-  // We can batch query all existing nodes at once (up to 50)
+
   const params = new URLSearchParams({
     action: 'query',
     format: 'json',
     prop: 'links',
-    titles: existingNodeLabels.slice(0, 50).join('|'),
-    pllimit: 'max', // Get all links from these pages
-    plnamespace: '0', // Main namespace only
-    origin: '*',
+    titles: existingNodes.slice(0, 50).join('|'),
+    pllimit: 'max',
+    plnamespace: '0',
+    origin: '*'
   });
 
   try {
-    const response = await fetch(`${WIKI_ACTION_API}?${params}`);
-    const data = await response.json();
+    const res = await fetch(`${WIKI_ACTION_API}?${params}`);
+    const data = await res.json();
+    
+    // Count connections for each candidate
+    const connectionCounts = new Map<string, number>();
     
     if (data.query?.pages) {
-      // Check each page's links individually for a more accurate count
-      for (const page of Object.values(data.query.pages) as any[]) {
+      Object.values(data.query.pages).forEach((page: any) => {
         if (page.links) {
-          const pageLinks = new Set(page.links.map((l: any) => l.title));
-          for (const candidate of candidateTitles) {
-            if (pageLinks.has(candidate)) {
-              results.set(candidate, (results.get(candidate) || 0) + 1);
+          page.links.forEach((link: any) => {
+            const title = link.title;
+            if (candidates.includes(title)) {
+              connectionCounts.set(title, (connectionCounts.get(title) || 0) + 1);
             }
-          }
+          });
         }
-      }
+      });
     }
-  } catch (error) {
-    console.error('Failed to fetch graph connections:', error);
-  }
-  return results;
-}
 
-
-/**
- * Fetches pageviews for a list of articles for the last 30 days.
- * Returns a Map<title, view_count>.
- */
-async function fetchPageviews(titles: string[]): Promise<Map<string, number>> {
-  // Get YYYYMMDD for 30 days ago and yesterday
-  const endDate = new Date();
-  endDate.setDate(endDate.getDate() - 1); // Yesterday
-  const startDate = new Date();
-  startDate.setDate(startDate.getDate() - 31); // 30 days ago
-  
-  const YYYYMMDD = (date: Date) => date.toISOString().split('T')[0].replace(/-/g, '');
-  
-  const results = new Map<string, number>();
-  
-  // Run requests in parallel
-  const promises = titles.map(async (title) => {
-    const encodedTitle = encodeURIComponent(title.replace(/ /g, '_')); // Wiki titles use underscores
+    // Normalize scores
+    candidates.forEach(candidate => {
+      const count = connectionCounts.get(candidate) || 0;
+      results.set(candidate, Math.min(1, count / Math.max(1, existingNodes.length * 0.3)));
+    });
     
-    // --- THIS IS THE FIX ---
-    // Changed 'monthly' to 'daily' to match the 30-day date range
-    const url = `${WIKI_PAGEVIEWS_API}/en.wikipedia/all-access/all-agents/${encodedTitle}/daily/${YYYYMMDD(startDate)}/${YYYYMMDD(endDate)}`;
-    // --- END OF FIX ---
+  } catch (e) {
+    console.error('Connection check error:', e);
+    candidates.forEach(c => results.set(c, 0));
+  }
 
-    try {
-      const res = await fetch(url, { headers: { 'User-Agent': 'WikiExplorer/1.0' }});
-      if (!res.ok) {
-        // Log the error but don't stop the other requests
-        console.warn(`Failed to fetch pageviews for ${title}: ${res.statusText}`);
-        return;
-      }
-      const data = await res.json();
-      if (data.items) {
-        // Sum up the views for each day
-        const totalViews = data.items.reduce((sum: number, item: any) => sum + item.views, 0);
-        results.set(title, totalViews);
-      }
-    } catch (e) {
-      console.warn(`Failed to fetch pageviews for ${title}:`, e);
-    }
-  });
-  
-  await Promise.all(promises);
   return results;
 }
 
 /**
- * Fetches backlink counts (linkshere) for a list of articles.
- * Returns a Map<title, backlink_count>.
+ * Calculate text similarity (simplified)
  */
-async function fetchBacklinks(titles: string[]): Promise<Map<string, number>> {
-  const results = new Map<string, number>();
-  const titlesBatch = titles.slice(0, 50); 
-  const params = new URLSearchParams({
-    action: 'query', format: 'json', prop: 'linkshere',
-    titles: titlesBatch.join('|'),
-    lhprop: 'total', lhnamespace: '0', lhlimit: '1', origin: '*',
-  });
-  try {
-    const response = await fetch(`${WIKI_ACTION_API}?${params}`);
-    const data = await response.json();
-    if (data.query?.pages) {
-      for (const page of Object.values(data.query.pages) as any[]) {
-        if (page.title && page.linkshere) results.set(page.title, page.linkshere.total);
-        else if (page.title) results.set(page.title, 0);
-      }
-    }
-  } catch (error) { console.error('Failed to fetch backlinks:', error); }
-  return results;
-}
+function calculateSimilarity(text1: string, text2: string): number {
+  if (!text1 || !text2) return 0;
 
-/**
- * Batch-fetches short text extracts (summaries) for a list of articles.
- * Returns a Map<title, extract_text>.
- */
-async function fetchExtracts(titles: string[]): Promise<Map<string, string>> {
-  const results = new Map<string, string>();
-  const titlesBatch = titles.slice(0, 50); // Action API limit
+  const words1 = new Set(text1.toLowerCase().match(/\b\w{4,}\b/g) || []);
+  const words2 = new Set(text2.toLowerCase().match(/\b\w{4,}\b/g) || []);
   
-  const params = new URLSearchParams({
-    action: 'query',
-    format: 'json',
-    prop: 'extracts',
-    exintro: 'true', // Only the intro
-    explaintext: 'true', // Plain text, no HTML
-    exsentences: '2', // Keep it short and high-signal
-    titles: titlesBatch.join('|'),
-    origin: '*',
-  });
-
-  try {
-    const response = await fetch(`${WIKI_ACTION_API}?${params}`);
-    const data = await response.json();
-    
-    if (data.query?.pages) {
-      for (const page of Object.values(data.query.pages) as any[]) {
-        if (page.title && page.extract) {
-          results.set(page.title, page.extract);
-        }
-      }
-    }
-  } catch (error) {
-    console.error('Failed to fetch extracts:', error);
-  }
-  return results;
-}
-
-
-// --- Similarity Calculation Logic ---
-
-/**
- * Simple text pre-processing: lowercase, remove punctuation, split, remove stop words.
- */
-function preprocess(text: string): string[] {
-  return text.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/).filter(token => token.length > 2 && !STOP_WORDS.has(token));
-}
-
-/**
- * Calculates Term Frequency (TF) for a single document.
- * Returns a Map<token, frequency>.
- */
-function calculateTf(tokens: string[]): Map<string, number> {
-  const tf = new Map<string, number>();
-  const tokenCount = tokens.length;
-  if (tokenCount === 0) return tf;
-  for (const token of tokens) tf.set(token, (tf.get(token) || 0) + 1);
-  for (const [token, count] of tf.entries()) tf.set(token, count / tokenCount);
-  return tf;
-}
-
-/**
- * Calculates Inverse Document Frequency (IDF) for a corpus.
- * Returns a Map<token, idf_score>.
- */
-function calculateIdf(documents: string[][]): Map<string, number> {
-  const idf = new Map<string, number>();
-  const docCount = documents.length;
-  const docFrequency = new Map<string, number>();
-  for (const doc of documents) {
-    const uniqueTokens = new Set(doc);
-    for (const token of uniqueTokens) docFrequency.set(token, (docFrequency.get(token) || 0) + 1);
-  }
-  for (const [token, count] of docFrequency.entries()) idf.set(token, Math.log(docCount / (1 + count)) + 1); // Use log smoothing
-  return idf;
-}
-
-/**
- * Calculates the cosine similarity between two TF-IDF vectors (represented as Maps).
- */
-function cosineSimilarity(vecA: Map<string, number>, vecB: Map<string, number>): number {
-  let dotProduct = 0, magA = 0, magB = 0;
-  const allTokens = new Set([...vecA.keys(), ...vecB.keys()]);
-  for (const token of allTokens) {
-    const valA = vecA.get(token) || 0, valB = vecB.get(token) || 0;
-    dotProduct += valA * valB;
-    magA += valA * valA;
-    magB += valB * valB;
-  }
-  magA = Math.sqrt(magA); magB = Math.sqrt(magB);
-  if (magA === 0 || magB === 0) return 0; // Avoid division by zero
-  return dotProduct / (magA * magB);
-}
-
-/**
- * Applies normalization and weighted scoring to a list of links with signals.
- * This is the core ranking algorithm.
- */
-function rankLinks(links: WikiLinkSignals[], sourceExtract: string, numExistingNodes: number): WikiLink[] {
-  if (links.length === 0) return [];
-
-  // --- 1. Calculate Similarity Scores ---
-  const sourceTokens = preprocess(sourceExtract);
-  const sourceTf = calculateTf(sourceTokens);
-  const candidateTokensList = links.map(link => preprocess(link.extract));
-  const idf = calculateIdf(candidateTokensList);
-  const candidateTfIdfVectors = candidateTokensList.map(tokens => {
-    const tf = calculateTf(tokens);
-    const tfIdfVector = new Map<string, number>();
-    for (const token of tokens) {
-      if (idf.has(token)) tfIdfVector.set(token, (tf.get(token) || 0) * (idf.get(token) || 0));
-    }
-    return tfIdfVector;
-  });
-  const sourceTfIdfVector = new Map<string, number>();
-  for (const token of sourceTokens) {
-    if (idf.has(token)) sourceTfIdfVector.set(token, (sourceTf.get(token) || 0) * (idf.get(token) || 0));
-  }
-  const similarityScores = candidateTfIdfVectors.map(vec => cosineSimilarity(sourceTfIdfVector, vec));
+  if (words1.size === 0 || words2.size === 0) return 0;
   
-  // --- 2. Normalize all signals ---
-  const maxSimilarity = Math.max(0.001, ...similarityScores);
-  const maxGraphConnections = Math.max(1, numExistingNodes); // Normalize against total possible connections
-
-  const scoredLinks = links.map((link, index) => {
-    // **Global Logarithmic Normalization**
-    const normPageviews = Math.log1p(link.pageviews) / Math.log1p(GLOBAL_MAX_PAGEVIEWS);
-    const normBacklinks = Math.log1p(link.backlinks) / Math.log1p(GLOBAL_MAX_BACKLINKS);
-    
-    // Linear normalization for batch-dependent signals
-    const normSimilarity = similarityScores[index] / maxSimilarity;
-    const normGraphConnections = link.graphConnections / maxGraphConnections;
-    
-    // --- 3. Calculate final weighted score ---
-    const score = 
-      (normGraphConnections * W_GRAPH_CONNS) +
-      (normSimilarity * W_SIMILARITY) +
-      (normBacklinks * W_BACKLINKS) +
-      (normPageviews * W_PAGEVIEWS);
-    
-    return {
-      title: link.title,
-      score: score * 100, // Scale to 0-100
-    };
-  });
+  const intersection = new Set([...words1].filter(x => words2.has(x)));
+  const union = new Set([...words1, ...words2]);
   
-  // Sort by score, descending
-  return scoredLinks.sort((a, b) => b.score - a.score);
+  return intersection.size / union.size;
 }
 
+/**
+ * Normalize pageviews
+ */
+function normalizePageviews(views: number): number {
+  const MAX_VIEWS = 100000;
+  return Math.min(1, Math.log10(views + 1) / Math.log10(MAX_VIEWS));
+}
 
 /**
- * Aggressively filters out meta-pages, lists, timelines, etc.
+ * Filter meta pages
  */
 function isMetaPage(title: string): boolean {
+  const lower = title.toLowerCase();
+  
   const metaPrefixes = [
-    'Wikipedia:', 'Help:', 'Template:', 'Category:', 'Portal:', 'File:',
-    'Special:', 'Talk:', 'User:', 'Book:', 'Draft:', 'Module:', 'MediaWiki:',
+    'wikipedia:', 'template:', 'category:', 'portal:',
+    'help:', 'user:', 'talk:', 'file:'
   ];
-  const lowercaseTitle = title.toLowerCase();
-  const badPatterns = [
-    'disambiguation', 'list of', 'index of', 'glossary of', 'outline of',
-    'timeline', 'chronology', 'comparison of', 'history of', 'bibliography',
-    'career', 'early life', 'personal life',
+  
+  if (metaPrefixes.some(p => lower.startsWith(p))) return true;
+  
+  const patterns = [
+    'list of', 'timeline of', 'outline of', 'index of',
+    'comparison of', 'history of', 'bibliography'
   ];
-  const parenMatch = title.match(/\(([^)]+)\)/);
-  if (parenMatch) {
-    const parenText = parenMatch[1].toLowerCase();
-    const allowedParens = ['physics', 'mathematics', 'chemistry', 'biology', 'philosophy', 'concept', 'theory'];
-    if (!allowedParens.some(allowed => parenText.includes(allowed))) return true;
-  }
-  return (
-    metaPrefixes.some(prefix => title.startsWith(prefix)) ||
-    badPatterns.some(pattern => lowercaseTitle.includes(pattern)) ||
-    /\b(19|20)\d{2}\b/.test(title)
-  );
+  
+  if (patterns.some(p => lower.includes(p))) return true;
+  if (title.includes('(disambiguation)')) return true;
+  if (/^\d{3,4}s?$/.test(title)) return true;
+  
+  return false;
 }
