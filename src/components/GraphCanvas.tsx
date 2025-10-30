@@ -1,6 +1,5 @@
-import { useEffect, useRef } from 'react';
-// Correct import: 'Core' is a named export, 'cytoscape' is the default.
-import cytoscape, { Core } from 'cytoscape';
+import { useEffect, useRef, useCallback } from 'react';
+import cytoscape from 'cytoscape';
 import { useGraphStore } from '../stores/graphStore';
 
 interface GraphCanvasProps {
@@ -8,9 +7,7 @@ interface GraphCanvasProps {
   onNodeRightClick: (nodeId: string, x: number, y: number) => void;
 }
 
-// --- FAANG-Style Cytoscape Stylesheet ---
-// The correct type is 'cytoscape.StylesheetCSS[]'
-const cyStyle: cytoscape.Stylesheet[] = [
+const cyStyle = [
   {
     selector: 'node',
     style: {
@@ -20,12 +17,12 @@ const cyStyle: cytoscape.Stylesheet[] = [
       'font-family': 'Inter, sans-serif',
       'font-size': 11,
       'font-weight': 600,
-      'color': '#1f2937', // text-DEFAULT
+      'color': '#1f2937',
       'text-wrap': 'wrap',
       'text-max-width': 80,
-      'background-color': '#ffffff', // bg-DEFAULT
+      'background-color': '#ffffff',
       'border-width': 2,
-      'border-color': '#e5e7eb', // border-DEFAULT
+      'border-color': '#e5e7eb',
       'width': 90,
       'height': 90,
       'shape': 'ellipse',
@@ -36,15 +33,15 @@ const cyStyle: cytoscape.Stylesheet[] = [
   {
     selector: 'node:hover',
     style: {
-      'border-color': '#3b82f6', // primary-500
+      'border-color': '#3b82f6',
       'border-width': 3,
     },
   },
   {
     selector: 'node.selected',
     style: {
-      'background-color': '#eff6ff', // primary-50
-      'border-color': '#2563eb', // primary-600
+      'background-color': '#eff6ff',
+      'border-color': '#2563eb',
       'border-width': 4,
     },
   },
@@ -52,7 +49,7 @@ const cyStyle: cytoscape.Stylesheet[] = [
     selector: 'edge',
     style: {
       'width': 2,
-      'line-color': '#e5e7eb', // border-DEFAULT
+      'line-color': '#e5e7eb',
       'target-arrow-shape': 'triangle',
       'target-arrow-color': '#e5e7eb',
       'arrow-scale': 1,
@@ -66,14 +63,13 @@ const cyStyle: cytoscape.Stylesheet[] = [
     selector: 'edge.highlighted',
     style: {
       'width': 3,
-      'line-color': '#3b82f6', // primary-500
+      'line-color': '#3b82f6',
       'target-arrow-color': '#3b82f6',
       'opacity': 1,
     },
   },
 ];
 
-// --- Gentler, Smoother Layout Physics ---
 const cyLayout = {
   name: 'cose',
   animate: true,
@@ -95,71 +91,72 @@ const cyLayout = {
 
 export function GraphCanvas({ onNodeClick, onNodeRightClick }: GraphCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const cyRef = useRef<Core | null>(null);
+  const cyRef = useRef<cytoscape.Core | null>(null);
+  const layoutRunningRef = useRef(false);
   const { nodes, edges, selectedNode } = useGraphStore();
   
-  // Initialize Cytoscape
+  const handleNodeTap = useCallback((evt: any) => {
+    onNodeClick(evt.target.id());
+  }, [onNodeClick]);
+
+  const handleNodeRightClick = useCallback((evt: any) => {
+    evt.preventDefault();
+    const node = evt.target;
+    const renderedPosition = node.renderedPosition();
+    onNodeRightClick(node.id(), renderedPosition.x, renderedPosition.y);
+  }, [onNodeRightClick]);
+
+  const handleNodeMouseOver = useCallback((evt: any) => {
+    evt.target.connectedEdges().addClass('highlighted');
+  }, []);
+
+  const handleNodeMouseOut = useCallback((evt: any) => {
+    evt.target.connectedEdges().removeClass('highlighted');
+  }, []);
+
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (!containerRef.current || cyRef.current) return;
     
     cyRef.current = cytoscape({
       container: containerRef.current,
-      style: cyStyle,
-      layout: cyLayout as any, // 'as any' is needed for complex layout configs
+      style: cyStyle as any,
       wheelSensitivity: 0.2,
       minZoom: 0.3,
       maxZoom: 3,
+      layout: { name: 'preset' },
     });
     
     const cy = cyRef.current;
     
-    // --- Event Handlers ---
-    cy.on('tap', 'node', (evt) => {
-      onNodeClick(evt.target.id());
-    });
+    cy.on('tap', 'node', handleNodeTap);
+    cy.on('cxttap', 'node', handleNodeRightClick);
+    cy.on('mouseover', 'node', handleNodeMouseOver);
+    cy.on('mouseout', 'node', handleNodeMouseOut);
     
-    cy.on('cxttap', 'node', (evt) => {
-      evt.preventDefault();
-      const node = evt.target;
-      const renderedPosition = node.renderedPosition();
-      onNodeRightClick(node.id(), renderedPosition.x, renderedPosition.y);
-    });
-    
-    cy.on('mouseover', 'node', (evt) => {
-      evt.target.connectedEdges().addClass('highlighted');
-      evt.target.addClass('hover'); // Optional: for future hover styles
-    });
-    
-    cy.on('mouseout', 'node', (evt) => {
-      evt.target.connectedEdges().removeClass('highlighted');
-      evt.target.removeClass('hover');
-    });
-    
-    // Cleanup on unmount
     return () => {
-      cy.destroy();
+      if (cyRef.current) {
+        cyRef.current.destroy();
+        cyRef.current = null;
+      }
     };
-    // These props are stable functions, this effect runs once on mount
-  }, [onNodeClick, onNodeRightClick]);
+  }, [handleNodeTap, handleNodeRightClick, handleNodeMouseOver, handleNodeMouseOut]);
   
-  // Effect to update graph when nodes/edges change
   useEffect(() => {
     if (!cyRef.current) return;
     
     const cy = cyRef.current;
+    const existingNodeIds = new Set(cy.nodes().map(n => n.id()));
+    const existingEdgeIds = new Set(cy.edges().map(e => e.id()));
     
-    // Diffing: Find new nodes and edges
-    const existingNodeIds = cy.nodes().map(n => n.id());
     const newNodes = nodes
-      .filter(n => !existingNodeIds.includes(n.id))
+      .filter(n => !existingNodeIds.has(n.id))
       .map(node => ({
         group: 'nodes' as const,
         data: { id: node.id, label: node.label },
       }));
 
-    const existingEdgeIds = cy.edges().map(e => e.id());
     const newEdges = edges
-      .filter(e => !existingEdgeIds.includes(e.id))
+      .filter(e => !existingEdgeIds.has(e.id))
       .map(edge => ({
         group: 'edges' as const,
         data: { id: edge.id, source: edge.source, target: edge.target },
@@ -170,23 +167,29 @@ export function GraphCanvas({ onNodeClick, onNodeRightClick }: GraphCanvasProps)
     if (newElements.length > 0) {
       cy.add(newElements);
       
-      // Re-run the layout smoothly
-      cy.layout(cyLayout as any).run();
+      if (!layoutRunningRef.current) {
+        layoutRunningRef.current = true;
+        
+        const layout = cy.layout({
+          ...cyLayout,
+          stop: () => {
+            layoutRunningRef.current = false;
+          },
+        } as any);
+        
+        layout.run();
+      }
     }
   }, [nodes, edges]);
   
-  // Effect to update selected node styling
   useEffect(() => {
     if (!cyRef.current) return;
     
     const cy = cyRef.current;
-    
-    // Deselect all nodes first
     cy.nodes().removeClass('selected');
     
     if (selectedNode) {
       const nodeElement = cy.getElementById(selectedNode);
-      // Robustness: Only add class if the node exists
       if (nodeElement.length > 0) {
         nodeElement.addClass('selected');
       }
@@ -196,7 +199,7 @@ export function GraphCanvas({ onNodeClick, onNodeRightClick }: GraphCanvasProps)
   return (
     <div
       ref={containerRef}
-      className="w-full h-full bg-bg-subtle" // Use our new theme color
+      className="w-full h-full bg-bg-subtle"
     />
   );
 }
