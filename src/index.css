@@ -9,9 +9,7 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  @apply font-sans bg-bg-muted text-text;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -19,4 +17,19 @@ body {
 #root {
   width: 100%;
   height: 100vh;
+}
+
+/* Subtle scrollbar for the sidebar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-border-dark rounded-full;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-text-subtle;
 }
