@@ -6,6 +6,7 @@ import { Sidebar } from './components/SideBar';
 import { useGraphStore } from './stores/graphStore';
 import { fetchArticleSummary, fetchArticleLinks } from './lib/wikipedia';
 import type { WikiArticle } from './types';
+import weLogo from './assets/wikiExplorer-logo-300.png';
 
 const queryClient = new QueryClient();
 
@@ -101,10 +102,7 @@ function AppContent() {
         <div className="flex items-center justify-between h-16 px-4 md:px-6 border-b border-border">
           {/* Logo/Title (subtle) */}
           <div className="flex items-center gap-2">
-            <svg className="w-6 h-6 text-primary-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path>
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path>
-            </svg>
+            <img src={weLogo} alt="wikiExplorer Logo" className="w-16 h-16" />
             <h1 className="text-lg font-semibold text-text hidden md:block">
               wikiExplorer
             </h1>

@@ -30,7 +30,7 @@ export default {
         },
         // Base colors for text
         text: {
-          DEFAULT: '#1f2937', // gray-800
+          DEFAULT: '#36006B', // dark purple
           light: '#4b5563',   // gray-600
           subtle: '#9ca3af', // gray-400
         },
