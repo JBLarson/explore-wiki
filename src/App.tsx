@@ -106,7 +106,7 @@ function AppContent() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path>
             </svg>
             <h1 className="text-lg font-semibold text-text hidden md:block">
-              Explore Wiki
+              wikiExplorer
             </h1>
           </div>
           
