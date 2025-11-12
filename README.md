@@ -1,4 +1,4 @@
-# Explore Wiki
+# wikiExplorer 
 
 A desktop-first web application for exploring Wikipedia as a radial tree / interactive knowledge graph.
 
