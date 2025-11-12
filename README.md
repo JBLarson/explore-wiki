@@ -1,6 +1,9 @@
 # wikiExplorer 
-
 A desktop-first web application for exploring Wikipedia as a radial tree / interactive knowledge graph.
+
+<p align="center">
+  <img src="src/assets/wikiExplorer-logo-300.png" alt="wikiExplorer Logo" width="300">
+</p>
 
 ## What it does
 
